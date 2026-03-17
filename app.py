@@ -115,7 +115,12 @@ def stream_response(model_name: str, history: List[Tuple[str, str]], question: s
     thread = threading.Thread(target=model.generate, kwargs=gen_kwargs)
     thread.start()
 
+    last_chunk = None
     for text in streamer:
+        # Guard against duplicated chunks from stream backends causing repeated UI output.
+        if text and text == last_chunk:
+            continue
+        last_chunk = text
         yield text
 
 
@@ -131,6 +136,8 @@ def main():
 
     if "history" not in st.session_state:
         st.session_state.history = []
+    if "last_request_id" not in st.session_state:
+        st.session_state.last_request_id = None
 
     model_name = st.selectbox("SLM Selection", options=list(SUPPORTED_MODELS.keys()), index=0)
     st.markdown(f"**Model Status: Currently Using {model_name}**")
@@ -147,19 +154,25 @@ def main():
                 st.write(ai_a)
 
     st.divider()
-    question = st.text_input("Question Input", placeholder="Type your question here")
-    col1, col2 = st.columns([1, 1])
+    with st.form("chat_form", clear_on_submit=True):
+        question = st.text_input("Question Input", placeholder="Type your question here")
+        col1, col2 = st.columns([1, 1])
 
-    with col1:
-        submit_clicked = st.button("Submit", use_container_width=True)
-    with col2:
-        clear_clicked = st.button("Clear Conversation", use_container_width=True)
+        with col1:
+            submit_clicked = st.form_submit_button("Submit", use_container_width=True)
+        with col2:
+            clear_clicked = st.form_submit_button("Clear Conversation", use_container_width=True)
 
     if clear_clicked:
         st.session_state.history = []
         st.rerun()
 
     if submit_clicked and question.strip():
+        request_id = f"{len(st.session_state.history)}::{question.strip()}"
+        if st.session_state.last_request_id == request_id:
+            st.warning("This input was already processed. Submit a new question.")
+            return
+
         with st.chat_message("user"):
             st.write(question)
 
@@ -169,10 +182,11 @@ def main():
         built = ""
         for chunk in stream_response(model_name, st.session_state.history, question):
             built += chunk
-            placeholder.write(built)
+            placeholder.markdown(built)
 
         st.session_state.history.append((question, built.strip()))
         st.session_state.history = trim_history(st.session_state.history)
+        st.session_state.last_request_id = request_id
 
 
 if __name__ == "__main__":
